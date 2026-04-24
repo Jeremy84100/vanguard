@@ -38,4 +38,25 @@ describe("Vanguard API", function()
 			expect(Vanguard.GetStatus(999)).toBe(0)
 		end)
 	end)
+
+	describe("Resilience & Edge Cases", function()
+		it("should clamp invalid priorities to bounds", function()
+			Vanguard.Load(111, 5) -- Should clamp to 4
+			expect(Vanguard.GetStatus(111)).toBe(1)
+			
+			Vanguard.Load(222, -1) -- Should clamp to 1
+			expect(Vanguard.GetStatus(222)).toBe(1)
+		end)
+
+		it("should register callbacks without crashing", function()
+			Vanguard.OnProgress(1, function(loaded, total) end)
+			Vanguard.OnReady(1, function() end)
+			Vanguard.OnFailed(1, function() end)
+		end)
+
+		it("should wait without infinite hanging if queue is empty", function()
+			Vanguard.ClearQueue(1)
+			Vanguard.Wait(1) -- Should return instantly
+		end)
+	end)
 end)

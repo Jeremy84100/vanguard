@@ -24,7 +24,7 @@ local function FormatAsset(asset: any): any
 end
 
 function Vanguard.Load(asset: any, priority: number?)
-	local prio = priority or 3
+	local prio = math.clamp(priority or 3, 1, 4)
 	local formattedAsset = FormatAsset(asset)
 
 	-- Anti-Crash & Silent Skip
@@ -50,27 +50,29 @@ function Vanguard.Cancel(asset: any)
 end
 
 function Vanguard.OnReady(priority: number, callback: () -> ())
-	if Queue.IsEmpty(priority) then
+	local prio = math.clamp(priority, 1, 4)
+	if Queue.IsEmpty(prio) then
 		task.spawn(callback)
 	else
-		Worker.RegisterOnReady(priority, callback)
+		Worker.RegisterOnReady(prio, callback)
 	end
 end
 
 function Vanguard.OnProgress(priority: number, callback: (number, number) -> ())
-	Worker.RegisterOnProgress(priority, callback)
+	Worker.RegisterOnProgress(math.clamp(priority, 1, 4), callback)
 end
 
 function Vanguard.OnFailed(priority: number, callback: () -> ())
-	Worker.RegisterOnFailed(priority, callback)
+	Worker.RegisterOnFailed(math.clamp(priority, 1, 4), callback)
 end
 
 function Vanguard.Wait(priority: number)
-	if Queue.IsEmpty(priority) then
+	local prio = math.clamp(priority, 1, 4)
+	if Queue.IsEmpty(prio) then
 		return
 	end
 	local thread = coroutine.running()
-	Vanguard.OnReady(priority, function()
+	Vanguard.OnReady(prio, function()
 		task.spawn(thread)
 	end)
 	coroutine.yield()
@@ -82,7 +84,7 @@ function Vanguard.GetStatus(asset: any): number
 end
 
 function Vanguard.ClearQueue(priority: number)
-	Queue.Clear(priority)
+	Queue.Clear(math.clamp(priority, 1, 4))
 end
 
 function Vanguard.SetBatchSize(size: number)
@@ -90,7 +92,7 @@ function Vanguard.SetBatchSize(size: number)
 end
 
 function Vanguard.LoadList(list: { any }, priority: number?)
-	local prio = priority or 3
+	local prio = math.clamp(priority or 3, 1, 4)
 	for _, asset in ipairs(list) do
 		Vanguard.Load(asset, prio)
 	end
