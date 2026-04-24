@@ -1,0 +1,11 @@
+{
+  "name": "Vanguard",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "Vanguard": {
+        "$path": "src"
+      }
+    }
+  }
+}
