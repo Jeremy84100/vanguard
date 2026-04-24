@@ -5,7 +5,17 @@ local it = JestGlobals.it
 local expect = JestGlobals.expect
 
 describe("Worker Thread", function()
-		it("should exist and expose Start", function()
-			expect(type(Worker.Start)).toBe("function")
-		end)
+	it("should expose Start and Pause APIs", function()
+		expect(type(Worker.Start)).toBe("function")
+		expect(type(Worker.Pause)).toBe("function")
 	end)
+
+	it("should allow configuring batch size and timeout", function()
+		expect(type(Worker.SetBatchSize)).toBe("function")
+		expect(type(Worker.SetTimeout)).toBe("function")
+		
+		-- Simple test that they don't crash
+		Worker.SetBatchSize(100)
+		Worker.SetTimeout(5)
+	end)
+end)
