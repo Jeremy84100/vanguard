@@ -11,9 +11,11 @@
       },
       "DevPackages": {
         "$path": "DevPackages"
-      },
-      "Packages": {
-        "$path": "Packages"
+      }
+    },
+    "ServerScriptService": {
+      "Runner": {
+        "$path": "runner"
       }
     }
   }

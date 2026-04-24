@@ -4,8 +4,7 @@ local describe = JestGlobals.describe
 local it = JestGlobals.it
 local expect = JestGlobals.expect
 
-return function()
-	describe("Queue Manager", function()
+describe("Queue Manager", function()
 		it("should push and pop without reallocation", function()
 			Queue.Push(1, "rbxassetid://A")
 			local asset = Queue.Pop(1)
@@ -13,4 +12,3 @@ return function()
 			expect(Queue.Pop(1)).toBeNil()
 		end)
 	end)
-end
