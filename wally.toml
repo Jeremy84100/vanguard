@@ -1,0 +1,12 @@
+[package]
+name = "jeremy84100/vanguard"
+description = "Vanguard Preloader"
+version = "0.1.0"
+registry = "https://github.com/UpliftGames/wally-index"
+realm = "shared"
+
+[dependencies]
+
+[dev-dependencies]
+JestGlobals = "jsdotlua/jest-globals@3.2.1"
+Jest = "jsdotlua/jest@3.2.1"

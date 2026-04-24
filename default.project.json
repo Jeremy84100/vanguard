@@ -5,6 +5,15 @@
     "ReplicatedStorage": {
       "Vanguard": {
         "$path": "src"
+      },
+      "VanguardTests": {
+        "$path": "tests"
+      },
+      "DevPackages": {
+        "$path": "DevPackages"
+      },
+      "Packages": {
+        "$path": "Packages"
       }
     }
   }
