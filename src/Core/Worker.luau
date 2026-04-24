@@ -16,6 +16,8 @@ local BATCH_SIZE = 50
 local NextBatchSize = BATCH_SIZE
 local BatchArray = table.create(BATCH_SIZE)
 
+local LOAD_TIMEOUT = 10
+
 local function ProcessQueue()
 	while true do
 		if isPaused then
@@ -64,7 +66,7 @@ local function ProcessQueue()
 						task.spawn(currentThread, pcallSuccess)
 					end)
 
-					local timeoutThread = task.delay(10, function()
+					local timeoutThread = task.delay(LOAD_TIMEOUT, function()
 						if coroutine.status(loadThread) ~= "dead" then
 							task.cancel(loadThread)
 							task.spawn(currentThread, false)
@@ -143,6 +145,10 @@ end
 
 function Worker.SetBatchSize(size: number)
 	NextBatchSize = size
+end
+
+function Worker.SetTimeout(seconds: number)
+	LOAD_TIMEOUT = seconds
 end
 
 function Worker.RegisterOnReady(priority: number, callback: () -> ())
