@@ -2,6 +2,7 @@
 local ContentProvider = game:GetService("ContentProvider")
 local Queue = require(script.Parent.Queue)
 local State = require(script.Parent.State)
+local Throttler = require(script.Parent.Parent.Modules.Throttler)
 
 local Worker = {}
 local isRunning = false
@@ -34,10 +35,17 @@ local function ProcessQueue()
 
 		for priority = 1, 4 do
 			if not Queue.IsEmpty(priority) then
+				-- Ping checking via Throttler
+				local dynamicBatch = Throttler.CalculateBatchSize(BATCH_SIZE, 0.5) -- Mock 0.5s for now if we don't have previous load time, but checking ping works
+				if dynamicBatch == 0 then
+					task.wait(1) -- Heavy pause to recover ping
+					break -- Skip processing this cycle entirely
+				end
+
 				processedAny = true
 				local batchCount = 0
 
-				while batchCount < BATCH_SIZE and not Queue.IsEmpty(priority) do
+				while batchCount < dynamicBatch and not Queue.IsEmpty(priority) do
 					local asset = Queue.Pop(priority)
 					-- Lazy deletion: skip if state is no longer 1 (e.g. cancelled or loaded)
 					if asset and State.Get(asset) == 1 then
@@ -60,9 +68,11 @@ local function ProcessQueue()
 				-- Auto-Retry Loop (1 retry max)
 				while retries <= 1 and not success do
 					local loadThread = task.defer(function()
+						debug.profilebegin("Vanguard_BatchLoad")
 						local pcallSuccess = pcall(function()
 							ContentProvider:PreloadAsync(exactBatch)
 						end)
+						debug.profileend()
 						task.defer(currentThread, pcallSuccess)
 					end)
 
