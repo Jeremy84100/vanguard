@@ -1,20 +1,16 @@
 --!strict
 local Queue = {}
-local Queues = SharedTable.new()
-Queues[1] = SharedTable.new()
-Queues[2] = SharedTable.new()
-Queues[3] = SharedTable.new()
-Queues[4] = SharedTable.new()
+local Queues = { {}, {}, {}, {} } -- Tables normales pour une vitesse maximale (Serial Mode)
 
 local MAX_QUEUE_SIZE = 100000
 local NextInstanceId = 1 -- Compteur d'ID numérique (Zéro-Allocation RAM)
 
-local Pointers = SharedTable.new()
+local Pointers = {}
 for i = 1, 4 do
-	local ptr = SharedTable.new()
-	ptr.Head = 1
-	ptr.Tail = 1
-	Pointers[i] = ptr
+	Pointers[i] = {
+		Head = 1,
+		Tail = 1
+	}
 end
 
 Queue.InstanceRegistry = {} -- Main thread only: number -> Instance
@@ -74,7 +70,7 @@ function Queue.ResetTracking(priority: number)
 	TotalLoaded[priority] = 0
 end
 
-function Queue.Clear(priority: number)
+function Queue.Clear(priority: number, onClearAsset: ((any) -> ())?)
 	local p = priority
 	-- Clean up InstanceRegistry to avoid memory leaks
 	local head = Pointers[p].Head
@@ -86,12 +82,17 @@ function Queue.Clear(priority: number)
 		if type(assetKey) == "number" then
 			Queue.InstanceRegistry[assetKey] = nil
 		end
+		
+		if onClearAsset then
+			onClearAsset(assetKey)
+		end
+		
 		current = (current % MAX_QUEUE_SIZE) + 1
 	end
 
 	Pointers[p].Head = 1
 	Pointers[p].Tail = 1
-	SharedTable.clear(Queues[p])
+	table.clear(Queues[p])
 end
 
 function Queue.GetRingBuffer(priority: number)

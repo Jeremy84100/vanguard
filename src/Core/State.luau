@@ -1,6 +1,6 @@
 --!strict
 local State = {}
-local AssetStatus = SharedTable.new()
+local AssetStatus = {} -- Table normale pour une vitesse maximale (Serial Mode)
 
 State.InstanceRegistry = {}
 -- Les Clés Faibles (__mode = "k") s'occupent du nettoyage de la mémoire automatiquement
@@ -30,11 +30,25 @@ function State.Set(asset: any, status: number)
 		end
 	end
 	
-	-- Optimisation RAM : Si le statut est 0 (Annulé/Unloaded), on libère la SharedTable
+	-- Optimisation RAM : Si le statut est 0 (Annulé/Unloaded), on libère la table
 	if status == 0 then
 		AssetStatus[assetKey] = nil
 	else
 		AssetStatus[assetKey] = status
+	end
+end
+
+function State.Clear(asset: any)
+	local assetKey = asset
+	if typeof(asset) == "Instance" then
+		assetKey = State.InstanceRegistry[asset]
+		if assetKey then
+			State.InstanceRegistry[asset] = nil
+		end
+	end
+	
+	if assetKey then
+		AssetStatus[assetKey] = nil
 	end
 end
 
