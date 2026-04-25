@@ -5,18 +5,16 @@ local State = require(script.Parent.State)
 local Throttler = require(script.Parent.Parent.Modules.Throttler)
 
 local Worker = {}
-local isRunning = false
+local BATCH_SIZE = 50
+local IS_RUNNING = false
 local isPaused = false
 local VanguardDebug = false
 
 local OnReadyCallbacks = { {}, {}, {}, {} }
 local OnProgressCallbacks = { {}, {}, {}, {} }
 local OnFailedCallbacks = { {}, {}, {}, {} }
+local NextCallbackId = 1
 
-local NextCallbackId = 1 -- Unique ID generator for thread-safe callbacks
-
-local BATCH_SIZE = 50
-local NextBatchSize = BATCH_SIZE
 local BatchArray = table.create(BATCH_SIZE)
 
 local LOAD_TIMEOUT = 10
@@ -25,17 +23,13 @@ local LastLoadTime = 0.5 -- Starting estimation
 local function ProcessQueue()
 	while true do
 		if isPaused then
-			task.wait(0.1)
+			task.wait(0.2)
 			continue
-		end
-
-		if NextBatchSize ~= BATCH_SIZE then
-			BATCH_SIZE = NextBatchSize
-			BatchArray = table.create(BATCH_SIZE)
 		end
 
 		local processedAny = false
 
+		-- On parcourt par priorité (1 est le plus urgent)
 		for priority = 1, 4 do
 			if not Queue.IsEmpty(priority) then
 				-- Ping checking via Throttler
@@ -45,162 +39,163 @@ local function ProcessQueue()
 					break -- Skip processing this cycle entirely
 				end
 
-				processedAny = true
 				local batchCount = 0
+				table.clear(BatchArray)
 
-				while batchCount < dynamicBatch and not Queue.IsEmpty(priority) do
+				-- Remplissage du lot (Batch)
+				while batchCount < dynamicBatch do
 					local asset = Queue.Pop(priority)
-					-- Lazy deletion: skip if state is no longer 1 (e.g. cancelled or loaded)
-					if asset and State.Get(asset) == 1 then
+					if not asset then break end
+
+					-- On vérifie si l'asset est toujours valide (pas annulé entre temps)
+					if State.Get(asset) == 1 then
 						batchCount += 1
 						BatchArray[batchCount] = asset
 					end
 				end
 
-				if batchCount == 0 then
-					break
-				end -- Skip and restart prioritization
-
-				-- Slice array to exact batch size (ContentProvider requires exact array)
-				local exactBatch = table.move(BatchArray, 1, batchCount, 1, table.create(batchCount))
-				local currentThread = coroutine.running()
-
-				local success = false
-				local retries = 0
-
-				-- Auto-Retry Loop (1 retry max)
-				while retries <= 1 and not success do
-					local loadThread = task.spawn(function()
-						debug.profilebegin("Vanguard_BatchLoad")
-						local pcallSuccess = pcall(function()
-							ContentProvider:PreloadAsync(exactBatch)
-						end)
-						debug.profileend()
-						task.spawn(currentThread, pcallSuccess)
-					end)
-
-					local timeoutThread = task.delay(LOAD_TIMEOUT, function()
-						if coroutine.status(loadThread) ~= "dead" then
-							task.cancel(loadThread)
-							task.spawn(currentThread, false)
-						end
-					end)
-
-					local startClock = os.clock()
-					success = coroutine.yield()
-
-					if success then
-						LastLoadTime = os.clock() - startClock
-						if LastLoadTime < 0.01 then
-							LastLoadTime = 0.01
-						end
-						task.cancel(timeoutThread)
-					else
-						retries += 1
-						if VanguardDebug then
-							warn("Vanguard: Timeout on priority " .. priority .. " (Retry " .. retries .. ")")
-						end
-					end
-				end
-
-				if success then
-					Queue.AddLoaded(priority, batchCount)
-					for i = 1, batchCount do
-						State.Set(exactBatch[i], 2)
-					end
-
-					local loaded, total = Queue.GetProgress(priority)
-					for _, cb in pairs(OnProgressCallbacks[priority]) do
-						task.defer(cb, loaded, total)
-					end
-				else
+				if batchCount > 0 then
+					processedAny = true
+					local exactBatch = table.move(BatchArray, 1, batchCount, 1, table.create(batchCount))
+					
 					if VanguardDebug then
-						warn("Vanguard: Abandoning batch on priority " .. priority, exactBatch)
+						print(string.format("[Vanguard] Loading batch of %d assets (Prio %d)", batchCount, priority))
 					end
-					for i = 1, batchCount do
-						State.Set(exactBatch[i], 3)
+
+					local currentThread = coroutine.running()
+					local success = false
+					local retries = 0
+
+					-- Auto-Retry Loop (1 retry max)
+					while retries <= 1 and not success do
+						local isBatchActive = true -- 🔒 Verrou Booléen contre le "Ghost Resume"
+						
+						local loadThread = task.spawn(function()
+							-- debug.profilebegin supprimé : on ne profile pas de fonctions qui yield !
+							local pcallSuccess = pcall(function()
+								ContentProvider:PreloadAsync(exactBatch)
+							end)
+							
+							if isBatchActive then
+								isBatchActive = false
+								task.spawn(currentThread, pcallSuccess)
+							end
+						end)
+
+						local timeoutThread = task.delay(LOAD_TIMEOUT, function()
+							if isBatchActive then
+								isBatchActive = false
+								task.cancel(loadThread)
+								task.spawn(currentThread, false)
+							end
+						end)
+
+						local startClock = os.clock()
+						success = coroutine.yield()
+
+						if success then
+							LastLoadTime = os.clock() - startClock
+							if LastLoadTime < 0.01 then
+								LastLoadTime = 0.01
+							end
+							task.cancel(timeoutThread)
+						else
+							retries += 1
+							if VanguardDebug then
+								warn("[Vanguard] Batch failed, retrying...")
+							end
+						end
 					end
-					for _, cb in pairs(OnFailedCallbacks[priority]) do
-						task.defer(cb)
+
+					-- Mise à jour de l'état final
+					for _, asset in ipairs(exactBatch) do
+						State.Set(asset, success and 2 or 3)
+					end
+					
+					Queue.AddLoaded(priority, batchCount)
+
+					-- Trigger des Callbacks de progression
+					for _, callback in pairs(OnProgressCallbacks[priority]) do
+						task.defer(callback, Queue.GetProgress(priority))
+					end
+
+					-- Si la queue est vide, trigger OnReady
+					if Queue.IsEmpty(priority) then
+						for _, callback in pairs(OnReadyCallbacks[priority]) do
+							task.defer(callback)
+						end
+					end
+					
+					-- Si échec après retry, trigger OnFailed
+					if not success then
+						for _, callback in pairs(OnFailedCallbacks[priority]) do
+							task.defer(callback)
+						end
 					end
 				end
-
-				-- Trigger OnReady if queue is now empty
-				if Queue.IsEmpty(priority) then
-					for _, callback in pairs(OnReadyCallbacks[priority]) do
-						task.defer(callback)
-					end
-					table.clear(OnReadyCallbacks[priority])
-					Queue.ResetTracking(priority)
-				end
-
-				break -- Go back to priority 1 to ensure criticals are respected
 			end
 		end
 
 		if not processedAny then
-			task.wait(0.1) -- Idle sleep
+			task.wait(0.1) -- Attente si rien à traiter
 		end
 	end
 end
 
 function Worker.Start()
-	if isRunning then
-		return
-	end
-	isRunning = true
-	task.defer(ProcessQueue)
+	if IS_RUNNING then return end
+	IS_RUNNING = true
+	task.spawn(ProcessQueue)
+end
+
+function Worker.SetBatchSize(size: number)
+	BATCH_SIZE = math.clamp(size, 1, 100)
 end
 
 function Worker.Pause()
 	isPaused = true
 end
+
 function Worker.Resume()
 	isPaused = false
 end
+
 function Worker.SetDebug(value: boolean)
 	VanguardDebug = value
 end
 
-function Worker.SetBatchSize(size: number)
-	NextBatchSize = size
-end
-
-function Worker.SetTimeout(seconds: number)
-	LOAD_TIMEOUT = seconds
-end
-
-function Worker.RegisterOnReady(priority: number, callback: () -> ()): number
+-- Callbacks Registration
+function Worker.RegisterOnReady(prio: number, cb: () -> ()): number
 	local id = NextCallbackId
 	NextCallbackId += 1
-	OnReadyCallbacks[priority][id] = callback
+	OnReadyCallbacks[prio][id] = cb
 	return id
 end
 
-function Worker.UnregisterOnReady(priority: number, id: number)
-	OnReadyCallbacks[priority][id] = nil
+function Worker.UnregisterOnReady(prio: number, id: number)
+	OnReadyCallbacks[prio][id] = nil
 end
 
-function Worker.RegisterOnProgress(priority: number, callback: (number, number) -> ()): number
+function Worker.RegisterOnProgress(prio: number, cb: (number, number) -> ()): number
 	local id = NextCallbackId
 	NextCallbackId += 1
-	OnProgressCallbacks[priority][id] = callback
+	OnProgressCallbacks[prio][id] = cb
 	return id
 end
 
-function Worker.UnregisterOnProgress(priority: number, id: number)
-	OnProgressCallbacks[priority][id] = nil
+function Worker.UnregisterOnProgress(prio: number, id: number)
+	OnProgressCallbacks[prio][id] = nil
 end
 
-function Worker.RegisterOnFailed(priority: number, callback: () -> ()): number
+function Worker.RegisterOnFailed(prio: number, cb: () -> ()): number
 	local id = NextCallbackId
 	NextCallbackId += 1
-	OnFailedCallbacks[priority][id] = callback
+	OnFailedCallbacks[prio][id] = cb
 	return id
 end
 
-function Worker.UnregisterOnFailed(priority: number, id: number)
-	OnFailedCallbacks[priority][id] = nil
+function Worker.UnregisterOnFailed(prio: number, id: number)
+	OnFailedCallbacks[prio][id] = nil
 end
 
 return Worker
