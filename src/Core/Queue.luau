@@ -7,6 +7,8 @@ Queues[2] = SharedTable.new()
 Queues[3] = SharedTable.new()
 Queues[4] = SharedTable.new()
 
+local MAX_QUEUE_SIZE = 100000
+
 local Pointers = SharedTable.new()
 for i = 1, 4 do
 	local ptr = SharedTable.new()
@@ -32,7 +34,7 @@ function Queue.Push(priority: number, asset: any)
 	end
 
 	Queues[p][tail] = assetKey
-	Pointers[p].Tail = tail + 1
+	Pointers[p].Tail = (tail % MAX_QUEUE_SIZE) + 1
 	TotalPushed[priority] += 1
 end
 
@@ -43,7 +45,7 @@ function Queue.Pop(priority: number): any?
 	
 	local assetKey = Queues[p][head]
 	Queues[p][head] = nil -- Free memory
-	Pointers[p].Head = head + 1
+	Pointers[p].Head = (head % MAX_QUEUE_SIZE) + 1
 	
 	if type(assetKey) == "string" and string.sub(assetKey, 1, 5) == "inst_" then
 		local instance = Queue.InstanceRegistry[assetKey]
@@ -76,11 +78,14 @@ function Queue.Clear(priority: number)
 	-- Clean up InstanceRegistry to avoid memory leaks
 	local head = Pointers[p].Head
 	local tail = Pointers[p].Tail
-	for i = head, tail - 1 do
-		local assetKey = Queues[p][i]
+	
+	local current = head
+	while current ~= tail do
+		local assetKey = Queues[p][current]
 		if type(assetKey) == "string" and string.sub(assetKey, 1, 5) == "inst_" then
 			Queue.InstanceRegistry[assetKey] = nil
 		end
+		current = (current % MAX_QUEUE_SIZE) + 1
 	end
 
 	Pointers[p].Head = 1
