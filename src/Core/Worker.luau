@@ -10,9 +10,9 @@ local IS_RUNNING = false
 local isPaused = false
 local VanguardDebug = false
 
-local OnReadyCallbacks = { {}, {}, {}, {} }
-local OnProgressCallbacks = { {}, {}, {}, {} }
-local OnFailedCallbacks = { {}, {}, {}, {} }
+local OnReadyCallbacks: { [number]: { [number]: () -> () } } = { {}, {}, {}, {} }
+local OnProgressCallbacks: { [number]: { [number]: (number, number) -> () } } = { {}, {}, {}, {} }
+local OnFailedCallbacks: { [number]: { [number]: () -> () } } = { {}, {}, {}, {} }
 local NextCallbackId = 1
 
 local BatchArray = table.create(BATCH_SIZE)
@@ -134,8 +134,9 @@ local function ProcessQueue()
 					Queue.AddLoaded(priority, batchCount)
 
 					-- Trigger des Callbacks de progression
+					local loaded, total = Queue.GetProgress(priority)
 					for _, callback in OnProgressCallbacks[priority] do
-						task.defer(callback, Queue.GetProgress(priority))
+						task.defer(callback, loaded, total)
 					end
 
 					-- Si la queue est vide, trigger OnReady
