@@ -12,9 +12,11 @@ export type VanguardOptions = {
 	Debug: boolean?,
 }
 
-export type VanguardConnection = {
-	Disconnect: (self: VanguardConnection) -> ()
-}
+--[=[
+	DÉFINITION DIVINE : Les connexions sont désormais des nombres (ConnectionId).
+	Zéro allocation de table ou de closure lors de l'abonnement.
+]=]
+export type VanguardConnectionId = number
 
 -- Auto-start worker
 Worker.Start()
@@ -73,56 +75,53 @@ function Vanguard.Cancel(asset: any)
 	end
 end
 
-function Vanguard.OnReady(priority: number, callback: () -> ()): VanguardConnection
+-- --- ÉVÉNEMENTS ZÉRO-ALLOCATION ---
+
+function Vanguard.OnReady(priority: number, callback: () -> ()): VanguardConnectionId
 	local prio = math.clamp(priority, 1, 4)
 	if Queue.IsEmpty(prio) then
 		task.defer(callback)
-		-- Allocation minimale pour la compatibilité API
-		return { Disconnect = function() end }
-	else
-		local id = Worker.RegisterOnReady(prio, callback)
-		return {
-			Disconnect = function()
-				Worker.UnregisterOnReady(prio, id)
-			end
-		}
+		return 0 -- ID nul pour les tâches déjà terminées
 	end
+	return Worker.RegisterOnReady(prio, callback)
 end
 
-function Vanguard.OnProgress(priority: number, callback: (number, number) -> ()): VanguardConnection
-	local prio = math.clamp(priority, 1, 4)
-	local id = Worker.RegisterOnProgress(prio, callback)
-	return {
-		Disconnect = function()
-			Worker.UnregisterOnProgress(prio, id)
-		end
-	}
+function Vanguard.DisconnectOnReady(priority: number, connectionId: VanguardConnectionId)
+	if connectionId == 0 then return end
+	Worker.UnregisterOnReady(math.clamp(priority, 1, 4), connectionId)
 end
 
-function Vanguard.OnFailed(priority: number, callback: () -> ()): VanguardConnection
-	local prio = math.clamp(priority, 1, 4)
-	local id = Worker.RegisterOnFailed(prio, callback)
-	return {
-		Disconnect = function()
-			Worker.UnregisterOnFailed(prio, id)
-		end
-	}
+function Vanguard.OnProgress(priority: number, callback: (number, number) -> ()): VanguardConnectionId
+	return Worker.RegisterOnProgress(math.clamp(priority, 1, 4), callback)
+end
+
+function Vanguard.DisconnectOnProgress(priority: number, connectionId: VanguardConnectionId)
+	Worker.UnregisterOnProgress(math.clamp(priority, 1, 4), connectionId)
+end
+
+function Vanguard.OnFailed(priority: number, callback: () -> ()): VanguardConnectionId
+	return Worker.RegisterOnFailed(math.clamp(priority, 1, 4), callback)
+end
+
+function Vanguard.DisconnectOnFailed(priority: number, connectionId: VanguardConnectionId)
+	Worker.UnregisterOnFailed(math.clamp(priority, 1, 4), connectionId)
 end
 
 --[=[
 	Attend que la queue d'une priorité donnée soit vide.
+	Note : Wait() est une opération lourde par définition (yield),
+	l'allocation ici est négligeable par rapport au coût du thread.
 ]=]
 function Vanguard.Wait(priority: number)
 	local prio = math.clamp(priority, 1, 4)
 	if Queue.IsEmpty(prio) then return end
 	
 	local thread = coroutine.running()
-	local connection: VanguardConnection
+	local connectionId: VanguardConnectionId
 	
-	-- Note: Une closure est créée ici, mais Wait() étant une fonction bloquante,
-	-- elle ne peut pas être appelée dans une boucle serrée de type 60 FPS sans bloquer le thread.
-	connection = Vanguard.OnReady(prio, function()
-		if connection then connection:Disconnect() end
+	-- On utilise une closure ici, car Wait() ne peut pas être appelé 60 fois/sec
+	connectionId = Vanguard.OnReady(prio, function()
+		Vanguard.DisconnectOnReady(prio, connectionId)
 		task.spawn(thread)
 	end)
 	

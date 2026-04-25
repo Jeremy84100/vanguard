@@ -22,7 +22,42 @@ local batchFailedAssets = {} -- ♻️ Recyclage : Évite {} dans la boucle
 local LOAD_TIMEOUT = 10
 local LastLoadTime = 0.5 -- Starting estimation
 
+--[=[
+	Callback de préchargement statique pour éviter la création de closures.
+]=]
+local function PreloadCallback(contentId: string, fetchStatus: Enum.AssetFetchStatus)
+	if fetchStatus == Enum.AssetFetchStatus.Failure then
+		batchFailedAssets[contentId] = true
+	end
+end
+
+--[=[
+	Wrapper statique pour task.spawn afin d'éviter les closures dans la boucle.
+]=]
+local function BatchLoader(currentThread: thread, exactBatch: {any}, isBatchActiveRef: {Value: boolean})
+	-- On passe par une table "isBatchActiveRef" pour garder la référence sans closure
+	local success = pcall(ContentProvider.PreloadAsync, ContentProvider, exactBatch, PreloadCallback)
+	
+	if isBatchActiveRef.Value then
+		isBatchActiveRef.Value = false
+		task.spawn(currentThread, success)
+	end
+end
+
+--[=[
+	Handler statique pour le timeout.
+]=]
+local function TimeoutHandler(currentThread: thread, loadThread: thread, isBatchActiveRef: {Value: boolean})
+	if isBatchActiveRef.Value then
+		isBatchActiveRef.Value = false
+		task.cancel(loadThread)
+		task.spawn(currentThread, false)
+	end
+end
+
 local function ProcessQueue()
+	local isBatchActiveRef = { Value = false }
+	
 	while true do
 		if isPaused then
 			task.wait(0.2)
@@ -75,34 +110,12 @@ local function ProcessQueue()
 
 					-- Auto-Retry Loop (1 retry max)
 					while retries <= 1 and not finalSuccess do
-						local isBatchActive = true -- 🔒 Verrou Booléen contre le "Ghost Resume"
+						isBatchActiveRef.Value = true
 						table.clear(batchFailedAssets)
 						
-						local loadThread = task.spawn(function()
-							local pcallSuccess = pcall(function()
-								-- Utilisation du callback natif pour traquer les échecs réels (404, modération, etc.)
-								ContentProvider:PreloadAsync(exactBatch, function(contentId, fetchStatus)
-									if fetchStatus == Enum.AssetFetchStatus.Failure then
-										batchFailedAssets[contentId] = true
-									end
-								end)
-							end)
-							
-							if isBatchActive then
-								isBatchActive = false
-								-- Le Retry n'est déclenché QUE si le moteur crash (pcall) ou fait un Timeout
-								-- Les erreurs de téléchargement (404) sont définitives et ne justifient pas un retry global
-								task.spawn(currentThread, pcallSuccess)
-							end
-						end)
-
-						local timeoutThread = task.delay(LOAD_TIMEOUT, function()
-							if isBatchActive then
-								isBatchActive = false
-								task.cancel(loadThread)
-								task.spawn(currentThread, false)
-							end
-						end)
+						-- On utilise des fonctions statiques avec arguments pour Zéro-Allocation
+						local loadThread = task.spawn(BatchLoader, currentThread, exactBatch, isBatchActiveRef)
+						local timeoutThread = task.delay(LOAD_TIMEOUT, TimeoutHandler, currentThread, loadThread, isBatchActiveRef)
 
 						local startClock = os.clock()
 						finalSuccess = coroutine.yield()
