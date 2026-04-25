@@ -1,20 +1,24 @@
 --!strict
+--!native
+--!optimize 2
+
 local Spatial = {}
 
---[=[
-	Calcule la priorité d'un asset en fonction de la distance et de la vélocité.
-	Plus l'objet est proche ou s'approche rapidement, plus la priorité est haute (1).
-]=]
-function Spatial.CalculatePriority(origin: Vector3, velocity: Vector3, target: Vector3): number
-	local distance = (target - origin).Magnitude
-	local direction = (target - origin).Unit
-	local speed = velocity.Magnitude
+-- Declared locally to allow the Luau compiler to inline it inside the loop
+local function CalculatePriority(origin: Vector3, target: Vector3, speed: number, velocityUnit: Vector3): number
+	local diff = target - origin
+	local distance = diff.Magnitude
 	
-	-- Predictive loading: si on fonce vers l'objet, on réduit artificiellement la distance perçue
-	if speed > 10 then
-		local dotProduct = velocity.Unit:Dot(direction)
+	if speed > 10 and distance > 0.001 then
+		-- Optimize by using scalar multiplication instead of vector division
+		local invDistance = 1 / distance
+		local direction = diff * invDistance 
+		
+		local dotProduct = velocityUnit:Dot(direction)
+		
 		if dotProduct > 0.5 then
-			distance = math.max(0, distance - (speed * dotProduct))
+			local newDistance = distance - (speed * dotProduct)
+			distance = if newDistance > 0 then newDistance else 0
 		end
 	end
 	
@@ -24,20 +28,20 @@ function Spatial.CalculatePriority(origin: Vector3, velocity: Vector3, target: V
 	else return 4 end
 end
 
---[=[
-	Exemple de traitement spatial en parallèle.
-	@param resultsBuffer Une table fournie par l'appelant qui sera recyclée (Zéro-Allocation).
-]=]
+Spatial.CalculatePriority = CalculatePriority
+
 function Spatial.Track(assets: { [any]: Vector3 }, resultsBuffer: { [any]: number }, origin: Vector3, velocity: Vector3)
-	task.desynchronize() -- Passage en mode Parallèle
+	table.clear(resultsBuffer) 
 	
-	table.clear(resultsBuffer) -- ♻️ Recyclage de la table fournie
-	
-	for assetId, pos in assets do
-		resultsBuffer[assetId] = Spatial.CalculatePriority(origin, velocity, pos)
+	local speed = velocity.Magnitude
+	local velocityUnit = Vector3.zero
+	if speed > 0.001 then
+		velocityUnit = velocity * (1 / speed)
 	end
 	
-	task.synchronize() -- Retour en mode Serial
+	for assetId, pos in assets do
+		resultsBuffer[assetId] = CalculatePriority(origin, pos, speed, velocityUnit)
+	end
 end
 
 return Spatial

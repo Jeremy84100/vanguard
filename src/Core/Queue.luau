@@ -1,60 +1,61 @@
 --!strict
+--!native
+--!optimize 2
+
 local Queue = {}
-local Queues = { {}, {}, {}, {} } -- Tables normales pour une vitesse maximale (Serial Mode)
+local Capacities = { 1000, 2000, 5000, 5000 }
+local Queues = {
+	[1] = table.create(Capacities[1]),
+	[2] = table.create(Capacities[2]),
+	[3] = table.create(Capacities[3]),
+	[4] = table.create(Capacities[4]),
+}
 
-local MAX_QUEUE_SIZE = 100000
-local NextInstanceId = 1 -- Compteur d'ID numérique (Zéro-Allocation RAM)
-
-local Pointers = {}
 for i = 1, 4 do
-	Pointers[i] = {
-		Head = 1,
-		Tail = 1
-	}
+	setmetatable(Queues[i], { __mode = "v" })
 end
 
-Queue.InstanceRegistry = {} -- Main thread only: number -> Instance
-setmetatable(Queue.InstanceRegistry, { __mode = "v" }) -- Weak values: allow GC if instance is destroyed
-
+local WriteHeads = { 1, 1, 1, 1 }
+local ReadHeads = { 1, 1, 1, 1 }
 local TotalPushed = { 0, 0, 0, 0 }
 local TotalLoaded = { 0, 0, 0, 0 }
 
 function Queue.Push(priority: number, asset: any)
-	local p = priority
-	local tail = Pointers[p].Tail
+	local head = WriteHeads[priority]
+	local nextHead = (head % Capacities[priority]) + 1
 	
-	local assetKey = asset
-	if typeof(asset) == "Instance" then
-		assetKey = NextInstanceId
-		NextInstanceId += 1
-		Queue.InstanceRegistry[assetKey] = asset
+	if nextHead == ReadHeads[priority] then
+		warn("[Vanguard] Queue Overflow for Priority", priority, "- Asset ignored.")
+		return false
 	end
 
-	Queues[p][tail] = assetKey
-	Pointers[p].Tail = (tail % MAX_QUEUE_SIZE) + 1
+	Queues[priority][head] = asset
+	WriteHeads[priority] = nextHead
 	TotalPushed[priority] += 1
+	
+	return true
 end
 
 function Queue.Pop(priority: number): any?
-	local p = priority
-	local head = Pointers[p].Head
-	if head == Pointers[p].Tail then return nil end
+	local readHead = ReadHeads[priority]
+	local writeHead = WriteHeads[priority]
 	
-	local assetKey = Queues[p][head]
-	Queues[p][head] = nil -- Free memory
-	Pointers[p].Head = (head % MAX_QUEUE_SIZE) + 1
-	
-	if type(assetKey) == "number" then
-		local instance = Queue.InstanceRegistry[assetKey]
-		Queue.InstanceRegistry[assetKey] = nil -- Free registry
-		return instance
+	while readHead ~= writeHead do
+		local asset = Queues[priority][readHead]
+		Queues[priority][readHead] = nil -- Free reference for GC
+		readHead = (readHead % Capacities[priority]) + 1
+		ReadHeads[priority] = readHead
+		
+		if asset ~= nil then
+			return asset
+		end
 	end
-
-	return assetKey
+	
+	return nil
 end
 
 function Queue.IsEmpty(priority: number): boolean
-	return Pointers[priority].Head == Pointers[priority].Tail
+	return ReadHeads[priority] == WriteHeads[priority]
 end
 
 function Queue.AddLoaded(priority: number, count: number)
@@ -71,32 +72,25 @@ function Queue.ResetTracking(priority: number)
 end
 
 function Queue.Clear(priority: number, onClearAsset: ((any) -> ())?)
-	local p = priority
-	-- Clean up InstanceRegistry to avoid memory leaks
-	local head = Pointers[p].Head
-	local tail = Pointers[p].Tail
-	
-	local current = head
-	while current ~= tail do
-		local assetKey = Queues[p][current]
-		if type(assetKey) == "number" then
-			Queue.InstanceRegistry[assetKey] = nil
-		end
+	if onClearAsset then
+		local readHead = ReadHeads[priority]
+		local writeHead = WriteHeads[priority]
 		
-		if onClearAsset then
-			onClearAsset(assetKey)
+		while readHead ~= writeHead do
+			local asset = Queues[priority][readHead]
+			if asset then
+				pcall(onClearAsset, asset)
+			end
+			readHead = (readHead % Capacities[priority]) + 1
 		end
-		
-		current = (current % MAX_QUEUE_SIZE) + 1
 	end
 
-	Pointers[p].Head = 1
-	Pointers[p].Tail = 1
-	table.clear(Queues[p])
-end
+	-- Clears the table while keeping the pre-allocated memory intact for zero-allocation
+	table.clear(Queues[priority])
 
-function Queue.GetRingBuffer(priority: number)
-	return Queues[priority]
+	ReadHeads[priority] = 1
+	WriteHeads[priority] = 1
+	Queue.ResetTracking(priority)
 end
 
 return Queue

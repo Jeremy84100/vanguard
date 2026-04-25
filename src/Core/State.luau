@@ -1,55 +1,27 @@
 --!strict
+--!native
+--!optimize 2
+
 local State = {}
-local AssetStatus = {} -- Table normale pour une vitesse maximale (Serial Mode)
-
-State.InstanceRegistry = {}
--- Les Clés Faibles (__mode = "k") s'occupent du nettoyage de la mémoire automatiquement
--- quand l'Instance est détruite par le jeu. On ne doit pas le faire manuellement.
-setmetatable(State.InstanceRegistry, { __mode = "k" })
-
-local NextInstanceId = 1 -- Compteur d'ID numérique (Zéro-Allocation RAM)
+local AssetStatus: { [any]: number } = {}
+setmetatable(AssetStatus, { __mode = "k" })
 
 -- 0: Unloaded, 1: Pending, 2: Loaded, 3: Failed
 function State.Get(asset: any): number
-	local assetKey = asset
-	if typeof(asset) == "Instance" then
-		assetKey = State.InstanceRegistry[asset]
-		if not assetKey then return 0 end
-	end
-	return AssetStatus[assetKey] or 0
+	return AssetStatus[asset] or 0
 end
 
 function State.Set(asset: any, status: number)
-	local assetKey = asset
-	if typeof(asset) == "Instance" then
-		assetKey = State.InstanceRegistry[asset]
-		if not assetKey then
-			assetKey = NextInstanceId
-			NextInstanceId += 1
-			State.InstanceRegistry[asset] = assetKey
-		end
-	end
-	
-	-- Optimisation RAM : Si le statut est 0 (Annulé/Unloaded), on libère la table
+	-- Free table entries for status 0 to reduce dictionary memory footprint
 	if status == 0 then
-		AssetStatus[assetKey] = nil
+		AssetStatus[asset] = nil
 	else
-		AssetStatus[assetKey] = status
+		AssetStatus[asset] = status
 	end
 end
 
 function State.Clear(asset: any)
-	local assetKey = asset
-	if typeof(asset) == "Instance" then
-		assetKey = State.InstanceRegistry[asset]
-		if assetKey then
-			State.InstanceRegistry[asset] = nil
-		end
-	end
-	
-	if assetKey then
-		AssetStatus[assetKey] = nil
-	end
+	AssetStatus[asset] = nil
 end
 
 return State

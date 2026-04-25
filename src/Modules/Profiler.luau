@@ -1,40 +1,56 @@
 --!strict
+--!native
+--!optimize 2
 local Profiler = {}
 local Records = {}
 local RecordIndex = 1
 local MAX_RECORDS = 1000
 
--- Buffer statique pour GenerateReport pour éviter les allocations d'usage interne
+-- Static buffer for GenerateReport to prevent internal allocations
 local InternalReportBuffer = {}
-
--- Initialisation Zéro-Allocation : on pré-alloue les tables de records
 for i = 1, MAX_RECORDS do
 	Records[i] = {id = "", time = 0}
 end
 
+local TotalRecorded = 0
+
 function Profiler.Record(assetId: any, timeTaken: number)
 	local record = Records[RecordIndex]
-	record.id = tostring(assetId)
+	if typeof(assetId) == "Instance" then
+		-- Use .Name instead of :GetFullName() to reduce string allocation
+		record.id = assetId.Name
+	else
+		record.id = tostring(assetId)
+	end
 	record.time = timeTaken
 	RecordIndex = (RecordIndex % MAX_RECORDS) + 1
+	if TotalRecorded < MAX_RECORDS then
+		TotalRecorded += 1
+	end
 end
 
---[=[
-	Récupère les assets les plus lents.
-	@param resultsBuffer Une table fournie par l'appelant qui sera recyclée.
-]=]
+-- Sorts a copy of the buffer to avoid breaking the original Ring Buffer's indexing.
 function Profiler.GetTopSlowest(limit: number, resultsBuffer: {any})
 	table.clear(resultsBuffer)
 	
-	-- Note: Le tri alloue un peu de mémoire en interne, mais cette fonction
-	-- n'est pas censée être appelée dans une boucle de jeu.
-	table.sort(Records, function(a, b) return a.time > b.time end)
+	if TotalRecorded == 0 then return end
 	
 	local count = 0
-	for i = 1, math.min(limit, MAX_RECORDS) do
-		if Records[i].time > 0 then
+	for i = 1, TotalRecorded do
+		local rec = Records[i]
+		if rec.time > 0 then
 			count += 1
-			resultsBuffer[count] = Records[i]
+			resultsBuffer[count] = rec
+		end
+	end
+	
+	table.sort(resultsBuffer, function(a, b) 
+		return a.time > b.time 
+	end)
+	
+	if #resultsBuffer > limit then
+		for i = limit + 1, #resultsBuffer do
+			resultsBuffer[i] = nil
 		end
 	end
 end
@@ -57,6 +73,7 @@ function Profiler.Clear()
 		record.time = 0
 	end
 	RecordIndex = 1
+	TotalRecorded = 0
 end
 
 return Profiler

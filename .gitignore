@@ -1,0 +1,19 @@
+# Dependencies
+Packages/
+DevPackages/
+
+# Rojo
+sourcemap.json
+*.project.json
+!default.project.json
+
+# Builds
+*.rbxl
+*.rbxlx
+
+# System Files
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/

@@ -12,11 +12,6 @@
       "DevPackages": {
         "$path": "DevPackages"
       }
-    },
-    "ServerScriptService": {
-      "Runner": {
-        "$path": "runner"
-      }
     }
   }
 }

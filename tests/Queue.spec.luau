@@ -19,12 +19,9 @@ describe("Queue Manager", function()
 	end)
 
 	it("should wrap around the Ring Buffer correctly", function()
-		-- Priority 1 capacity is 1000
 		Queue.Clear(1)
 		for i = 1, 1005 do
 			Queue.Push(1, "Asset_" .. i)
-			-- Constantly pop to keep space? Wait, pushing past 1000 without popping will overwrite unread data!
-			-- But let's just push and pop sequentially 1500 times to verify modulo doesn't crash
 			local asset = Queue.Pop(1)
 			expect(asset).toBe("Asset_" .. i)
 		end
@@ -49,9 +46,26 @@ describe("Queue Manager", function()
 		expect(Queue.Pop(1)).toBeNil()
 	end)
 
-	it("should use SharedTable for internal queue", function()
-		-- Since Queue is supposed to be a SharedTable now or hold them
-		expect(type(Queue.GetRingBuffer)).toBe("function")
-		expect(typeof(Queue.GetRingBuffer(1))).toBe("SharedTable")
+	it("should return false on overflow", function()
+		Queue.Clear(1)
+		for i = 1, 999 do
+			expect(Queue.Push(1, "Asset_" .. i)).toBe(true)
+		end
+		expect(Queue.Push(1, "Asset_Overflow")).toBe(false)
+	end)
+
+	it("should execute callback during Clear", function()
+		-- 🛡️ CORRECTION : On nettoie les déchets du test d'Overflow précédent !
+		Queue.Clear(1) 
+		
+		local cleared = {}
+		Queue.Push(1, "Asset_ToClear")
+		
+		Queue.Clear(1, function(asset)
+			table.insert(cleared, asset)
+		end)
+		
+		expect(#cleared).toBe(1)
+		expect(cleared[1]).toBe("Asset_ToClear")
 	end)
 end)

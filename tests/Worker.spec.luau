@@ -18,4 +18,15 @@ describe("Worker Thread", function()
 		Worker.SetBatchSize(100)
 		Worker.SetTimeout(5)
 	end)
+
+	it("should register and unregister callbacks with unique incrementing IDs", function()
+		local id1 = Worker.RegisterOnReady(1, function() end)
+		local id2 = Worker.RegisterOnReady(1, function() end)
+		
+		expect(id1).toBeDefined()
+		expect(id2).toBeGreaterThan(id1)
+		
+		Worker.UnregisterOnReady(1, id1)
+		Worker.UnregisterOnReady(1, id2)
+	end)
 end)

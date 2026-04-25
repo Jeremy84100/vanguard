@@ -15,49 +15,48 @@ local OnProgressCallbacks: { [number]: { [number]: (number, number) -> () } } = 
 local OnFailedCallbacks: { [number]: { [number]: () -> () } } = { {}, {}, {}, {} }
 local NextCallbackId = 1
 
-local BatchArray = table.create(BATCH_SIZE)
-local ExactBatchArray = {} -- ♻️ Recyclage : Évite table.create() dans la boucle
-local batchFailedAssets = {} -- ♻️ Recyclage : Évite {} dans la boucle
+local BatchArray = table.create(100)
+local ExactBatchArray = {}
+local batchFailedAssets = {}
 
 local LOAD_TIMEOUT = 10
 local LastLoadTime = 0.5 -- Starting estimation
+local NextBatchCounter = 1
+local ActiveBatchId = 0
+local MAX_BATCH_SIZE = 100
+local MAX_PRIORITY = 4
 
---[=[
-	Callback de préchargement statique pour éviter la création de closures.
-]=]
+-- Static preload callback prevents closure allocation
 local function PreloadCallback(contentId: string, fetchStatus: Enum.AssetFetchStatus)
-	if fetchStatus == Enum.AssetFetchStatus.Failure then
+	if fetchStatus == Enum.AssetFetchStatus.Failure or fetchStatus == Enum.AssetFetchStatus.TimedOut then
 		batchFailedAssets[contentId] = true
 	end
 end
 
---[=[
-	Wrapper statique pour task.spawn afin d'éviter les closures dans la boucle.
-]=]
-local function BatchLoader(currentThread: thread, exactBatch: {any}, isBatchActiveRef: {Value: boolean})
-	-- On passe par une table "isBatchActiveRef" pour garder la référence sans closure
-	local success = pcall(ContentProvider.PreloadAsync, ContentProvider, exactBatch, PreloadCallback)
+-- Static wrapper for task.spawn prevents closure allocation in loops
+local function BatchLoader(currentThread: thread, exactBatch: {any}, batchId: number, debugMode: boolean)
+	local success, err = pcall(ContentProvider.PreloadAsync, ContentProvider, exactBatch, PreloadCallback)
 	
-	if isBatchActiveRef.Value then
-		isBatchActiveRef.Value = false
-		task.spawn(currentThread, success)
+	if not success and debugMode then
+		warn("[Vanguard] ContentProvider Error:", err)
+	end
+	
+	if ActiveBatchId == batchId then
+		ActiveBatchId = 0
+		task.defer(currentThread, success)
 	end
 end
 
---[=[
-	Handler statique pour le timeout.
-]=]
-local function TimeoutHandler(currentThread: thread, loadThread: thread, isBatchActiveRef: {Value: boolean})
-	if isBatchActiveRef.Value then
-		isBatchActiveRef.Value = false
+-- Static handler for timeouts
+local function TimeoutHandler(currentThread: thread, loadThread: thread, batchId: number)
+	if ActiveBatchId == batchId then
+		ActiveBatchId = 0
 		task.cancel(loadThread)
-		task.spawn(currentThread, false)
+		task.defer(currentThread, false)
 	end
 end
 
 local function ProcessQueue()
-	local isBatchActiveRef = { Value = false }
-	
 	while true do
 		if isPaused then
 			task.wait(0.2)
@@ -66,27 +65,24 @@ local function ProcessQueue()
 
 		local processedAny = false
 
-		-- On parcourt par priorité (1 est le plus urgent)
-		for priority = 1, 4 do
+		for priority = 1, MAX_PRIORITY do
 			if not Queue.IsEmpty(priority) then
-				-- Ping checking via Throttler
 				local dynamicBatch = Throttler.CalculateBatchSize(BATCH_SIZE, LastLoadTime)
-				if dynamicBatch == 0 then
-					task.wait(1) -- Heavy pause to recover ping
-					break -- Skip processing this cycle entirely
+				BATCH_SIZE = math.min(dynamicBatch, MAX_BATCH_SIZE)
+				
+				if BATCH_SIZE == 0 then
+					task.wait(1)
+					break
 				end
 
 				local batchCount = 0
 				table.clear(BatchArray)
 
-				-- Remplissage du lot (Batch) - Sécurisé contre les objets détruits (nil)
-				while batchCount < dynamicBatch and not Queue.IsEmpty(priority) do
+				while batchCount < BATCH_SIZE do
 					local asset = Queue.Pop(priority)
 					
-					-- Si l'asset a été détruit entre temps (Weak Value dans la Queue), on continue !
-					if not asset then continue end
+					if not asset then break end
 
-					-- On vérifie si l'asset est toujours valide (pas annulé entre temps)
 					if State.Get(asset) == 1 then
 						batchCount += 1
 						BatchArray[batchCount] = asset
@@ -96,7 +92,6 @@ local function ProcessQueue()
 				if batchCount > 0 then
 					processedAny = true
 					
-					-- Zéro-Allocation : On recycle ExactBatchArray
 					table.clear(ExactBatchArray)
 					local exactBatch = table.move(BatchArray, 1, batchCount, 1, ExactBatchArray)
 					
@@ -108,24 +103,23 @@ local function ProcessQueue()
 					local finalSuccess = false
 					local retries = 0
 
-					-- Auto-Retry Loop (1 retry max)
 					while retries <= 1 and not finalSuccess do
-						isBatchActiveRef.Value = true
+						ActiveBatchId = NextBatchCounter
+						NextBatchCounter += 1
+						local currentBatchId = ActiveBatchId 
+						
 						table.clear(batchFailedAssets)
 						
-						-- On utilise des fonctions statiques avec arguments pour Zéro-Allocation
-						local loadThread = task.spawn(BatchLoader, currentThread, exactBatch, isBatchActiveRef)
-						local timeoutThread = task.delay(LOAD_TIMEOUT, TimeoutHandler, currentThread, loadThread, isBatchActiveRef)
+						local loadThread = task.spawn(BatchLoader, currentThread, exactBatch, currentBatchId, VanguardDebug)
+						local timeoutThread = task.delay(LOAD_TIMEOUT, TimeoutHandler, currentThread, loadThread, currentBatchId)
 
 						local startClock = os.clock()
 						finalSuccess = coroutine.yield()
 
+						task.cancel(timeoutThread)
+
 						if finalSuccess then
-							LastLoadTime = os.clock() - startClock
-							if LastLoadTime < 0.01 then
-								LastLoadTime = 0.01
-							end
-							task.cancel(timeoutThread)
+							LastLoadTime = math.max(0.01, os.clock() - startClock)
 						else
 							retries += 1
 							if VanguardDebug then
@@ -134,50 +128,56 @@ local function ProcessQueue()
 						end
 					end
 
-					-- Mise à jour de l'état final (Justice Individuelle)
 					for _, asset in exactBatch do
 						if finalSuccess then
 							local isSpecificFailure = false
-							if type(asset) == "string" and batchFailedAssets[asset] then
-								isSpecificFailure = true
+							
+							-- Verify ID match because Roblox modifies the asset string internally
+							if type(asset) == "string" then
+								local idStr = string.match(asset, "%d+")
+								if idStr then
+									for failedId, _ in batchFailedAssets do
+										if string.find(failedId, idStr, 1, true) then
+											isSpecificFailure = true
+											break
+										end
+									end
+								end
 							end
+							
 							State.Set(asset, isSpecificFailure and 3 or 2)
 						else
-							-- S'il y a eu un vrai Timeout ou crash global après retries
 							State.Set(asset, 3)
 						end
 					end
 					
 					Queue.AddLoaded(priority, batchCount)
 
-					-- Trigger des Callbacks de progression
 					local loaded, total = Queue.GetProgress(priority)
 					for _, callback in OnProgressCallbacks[priority] do
-						task.defer(callback, loaded, total)
+						task.spawn(callback, loaded, total)
 					end
 
-					-- Si la queue est vide, trigger OnReady
 					if Queue.IsEmpty(priority) then
 						Queue.ResetTracking(priority)
 						for _, callback in OnReadyCallbacks[priority] do
-							task.defer(callback)
+							task.spawn(callback)
 						end
 					end
 					
-					-- Si échec global après retry, trigger OnFailed
 					if not finalSuccess then
 						for _, callback in OnFailedCallbacks[priority] do
-							task.defer(callback)
+							task.spawn(callback)
 						end
 					end
 
-					break -- ⚠️ Strict Priority: Retourne à la priorité 1 immédiatement
+					break
 				end
 			end
 		end
 
 		if not processedAny then
-			task.wait(0.1) -- Attente si rien à traiter
+			task.wait(0.1)
 		end
 	end
 end
@@ -189,7 +189,11 @@ function Worker.Start()
 end
 
 function Worker.SetBatchSize(size: number)
-	BATCH_SIZE = math.clamp(size, 1, 100)
+	MAX_BATCH_SIZE = math.clamp(size, 1, 100)
+end
+
+function Worker.SetTimeout(time: number)
+	LOAD_TIMEOUT = math.max(1, time)
 end
 
 function Worker.Pause()
@@ -204,7 +208,6 @@ function Worker.SetDebug(value: boolean)
 	VanguardDebug = value
 end
 
--- Callbacks Registration
 function Worker.RegisterOnReady(prio: number, cb: () -> ()): number
 	local id = NextCallbackId
 	NextCallbackId += 1
