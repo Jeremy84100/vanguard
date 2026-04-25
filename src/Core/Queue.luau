@@ -15,7 +15,8 @@ for i = 1, 4 do
 	Pointers[i] = ptr
 end
 
-Queue.InstanceRegistry = {} -- Main thread only
+Queue.InstanceRegistry = {} -- Main thread only: UUID -> Instance
+setmetatable(Queue.InstanceRegistry, { __mode = "v" }) -- Weak values: allow GC if instance is destroyed
 
 local TotalPushed = { 0, 0, 0, 0 }
 local TotalLoaded = { 0, 0, 0, 0 }
@@ -71,8 +72,20 @@ function Queue.ResetTracking(priority: number)
 end
 
 function Queue.Clear(priority: number)
-	Pointers[priority].Head = Pointers[priority].Tail
-	SharedTable.clear(Queues[priority])
+	local p = priority
+	-- Clean up InstanceRegistry to avoid memory leaks
+	local head = Pointers[p].Head
+	local tail = Pointers[p].Tail
+	for i = head, tail - 1 do
+		local assetKey = Queues[p][i]
+		if type(assetKey) == "string" and string.sub(assetKey, 1, 5) == "inst_" then
+			Queue.InstanceRegistry[assetKey] = nil
+		end
+	end
+
+	Pointers[p].Head = 1
+	Pointers[p].Tail = 1
+	SharedTable.clear(Queues[p])
 end
 
 function Queue.GetRingBuffer(priority: number)
