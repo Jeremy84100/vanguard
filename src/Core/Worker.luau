@@ -118,7 +118,7 @@ local function ProcessQueue()
 					end
 
 					-- Mise à jour de l'état final (Justice Individuelle)
-					for _, asset in ipairs(exactBatch) do
+					for _, asset in exactBatch do
 						if finalSuccess then
 							local isSpecificFailure = false
 							if type(asset) == "string" and batchFailedAssets[asset] then
@@ -134,21 +134,21 @@ local function ProcessQueue()
 					Queue.AddLoaded(priority, batchCount)
 
 					-- Trigger des Callbacks de progression
-					for _, callback in pairs(OnProgressCallbacks[priority]) do
+					for _, callback in OnProgressCallbacks[priority] do
 						task.defer(callback, Queue.GetProgress(priority))
 					end
 
 					-- Si la queue est vide, trigger OnReady
 					if Queue.IsEmpty(priority) then
 						Queue.ResetTracking(priority)
-						for _, callback in pairs(OnReadyCallbacks[priority]) do
+						for _, callback in OnReadyCallbacks[priority] do
 							task.defer(callback)
 						end
 					end
 					
 					-- Si échec global après retry, trigger OnFailed
 					if not finalSuccess then
-						for _, callback in pairs(OnFailedCallbacks[priority]) do
+						for _, callback in OnFailedCallbacks[priority] do
 							task.defer(callback)
 						end
 					end
