@@ -67,26 +67,28 @@ local function ProcessQueue()
 					local currentThread = coroutine.running()
 					local finalSuccess = false
 					local retries = 0
+					local batchFailedAssets = {} -- 🔒 On isole les coupables pour éviter la punition collective
 
 					-- Auto-Retry Loop (1 retry max)
 					while retries <= 1 and not finalSuccess do
 						local isBatchActive = true -- 🔒 Verrou Booléen contre le "Ghost Resume"
-						local hasErrors = false
+						table.clear(batchFailedAssets)
 						
 						local loadThread = task.spawn(function()
 							local pcallSuccess = pcall(function()
 								-- Utilisation du callback natif pour traquer les échecs réels (404, modération, etc.)
 								ContentProvider:PreloadAsync(exactBatch, function(contentId, fetchStatus)
 									if fetchStatus == Enum.AssetFetchStatus.Failure then
-										hasErrors = true
+										batchFailedAssets[contentId] = true
 									end
 								end)
 							end)
 							
 							if isBatchActive then
 								isBatchActive = false
-								-- Le succès total dépend de l'absence d'erreurs Lua ET C++
-								task.spawn(currentThread, pcallSuccess and not hasErrors)
+								-- Le Retry n'est déclenché QUE si le moteur crash (pcall) ou fait un Timeout
+								-- Les erreurs de téléchargement (404) sont définitives et ne justifient pas un retry global
+								task.spawn(currentThread, pcallSuccess)
 							end
 						end)
 
@@ -110,14 +112,23 @@ local function ProcessQueue()
 						else
 							retries += 1
 							if VanguardDebug then
-								warn("[Vanguard] Batch failed or contains faulty assets, retrying...")
+								warn("[Vanguard] Batch operation failed (Timeout/Crash), retrying...")
 							end
 						end
 					end
 
-					-- Mise à jour de l'état final
+					-- Mise à jour de l'état final (Justice Individuelle)
 					for _, asset in ipairs(exactBatch) do
-						State.Set(asset, finalSuccess and 2 or 3)
+						if finalSuccess then
+							local isSpecificFailure = false
+							if type(asset) == "string" and batchFailedAssets[asset] then
+								isSpecificFailure = true
+							end
+							State.Set(asset, isSpecificFailure and 3 or 2)
+						else
+							-- S'il y a eu un vrai Timeout ou crash global après retries
+							State.Set(asset, 3)
+						end
 					end
 					
 					Queue.AddLoaded(priority, batchCount)
@@ -129,13 +140,13 @@ local function ProcessQueue()
 
 					-- Si la queue est vide, trigger OnReady
 					if Queue.IsEmpty(priority) then
-						Queue.ResetTracking(priority) -- ⚠️ Reset vital pour les prochaines barres de progression
+						Queue.ResetTracking(priority)
 						for _, callback in pairs(OnReadyCallbacks[priority]) do
 							task.defer(callback)
 						end
 					end
 					
-					-- Si échec après retry, trigger OnFailed
+					-- Si échec global après retry, trigger OnFailed
 					if not finalSuccess then
 						for _, callback in pairs(OnFailedCallbacks[priority]) do
 							task.defer(callback)
