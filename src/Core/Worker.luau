@@ -42,10 +42,12 @@ local function ProcessQueue()
 				local batchCount = 0
 				table.clear(BatchArray)
 
-				-- Remplissage du lot (Batch)
-				while batchCount < dynamicBatch do
+				-- Remplissage du lot (Batch) - Sécurisé contre les objets détruits (nil)
+				while batchCount < dynamicBatch and not Queue.IsEmpty(priority) do
 					local asset = Queue.Pop(priority)
-					if not asset then break end
+					
+					-- Si l'asset a été détruit entre temps (Weak Value dans la Queue), on continue !
+					if not asset then continue end
 
 					-- On vérifie si l'asset est toujours valide (pas annulé entre temps)
 					if State.Get(asset) == 1 then
@@ -63,22 +65,28 @@ local function ProcessQueue()
 					end
 
 					local currentThread = coroutine.running()
-					local success = false
+					local finalSuccess = false
 					local retries = 0
 
 					-- Auto-Retry Loop (1 retry max)
-					while retries <= 1 and not success do
+					while retries <= 1 and not finalSuccess do
 						local isBatchActive = true -- 🔒 Verrou Booléen contre le "Ghost Resume"
+						local hasErrors = false
 						
 						local loadThread = task.spawn(function()
-							-- debug.profilebegin supprimé : on ne profile pas de fonctions qui yield !
 							local pcallSuccess = pcall(function()
-								ContentProvider:PreloadAsync(exactBatch)
+								-- Utilisation du callback natif pour traquer les échecs réels (404, modération, etc.)
+								ContentProvider:PreloadAsync(exactBatch, function(contentId, fetchStatus)
+									if fetchStatus == Enum.AssetFetchStatus.Failure then
+										hasErrors = true
+									end
+								end)
 							end)
 							
 							if isBatchActive then
 								isBatchActive = false
-								task.spawn(currentThread, pcallSuccess)
+								-- Le succès total dépend de l'absence d'erreurs Lua ET C++
+								task.spawn(currentThread, pcallSuccess and not hasErrors)
 							end
 						end)
 
@@ -91,9 +99,9 @@ local function ProcessQueue()
 						end)
 
 						local startClock = os.clock()
-						success = coroutine.yield()
+						finalSuccess = coroutine.yield()
 
-						if success then
+						if finalSuccess then
 							LastLoadTime = os.clock() - startClock
 							if LastLoadTime < 0.01 then
 								LastLoadTime = 0.01
@@ -102,14 +110,14 @@ local function ProcessQueue()
 						else
 							retries += 1
 							if VanguardDebug then
-								warn("[Vanguard] Batch failed, retrying...")
+								warn("[Vanguard] Batch failed or contains faulty assets, retrying...")
 							end
 						end
 					end
 
 					-- Mise à jour de l'état final
 					for _, asset in ipairs(exactBatch) do
-						State.Set(asset, success and 2 or 3)
+						State.Set(asset, finalSuccess and 2 or 3)
 					end
 					
 					Queue.AddLoaded(priority, batchCount)
@@ -121,13 +129,14 @@ local function ProcessQueue()
 
 					-- Si la queue est vide, trigger OnReady
 					if Queue.IsEmpty(priority) then
+						Queue.ResetTracking(priority) -- ⚠️ Reset vital pour les prochaines barres de progression
 						for _, callback in pairs(OnReadyCallbacks[priority]) do
 							task.defer(callback)
 						end
 					end
 					
 					-- Si échec après retry, trigger OnFailed
-					if not success then
+					if not finalSuccess then
 						for _, callback in pairs(OnFailedCallbacks[priority]) do
 							task.defer(callback)
 						end
