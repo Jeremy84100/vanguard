@@ -48,4 +48,10 @@ describe("Queue Manager", function()
 		expect(Queue.IsEmpty(1)).toBe(true)
 		expect(Queue.Pop(1)).toBeNil()
 	end)
+
+	it("should use SharedTable for internal queue", function()
+		-- Since Queue is supposed to be a SharedTable now or hold them
+		expect(type(Queue.GetRingBuffer)).toBe("function")
+		expect(typeof(Queue.GetRingBuffer(1))).toBe("SharedTable")
+	end)
 end)

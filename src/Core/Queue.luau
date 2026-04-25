@@ -1,44 +1,60 @@
 --!strict
---!native
---!optimize 2
-
+local HttpService = game:GetService("HttpService")
 local Queue = {}
-local Capacities = { 1000, 2000, 5000, 5000 }
-local Queues = {
-	[1] = table.create(Capacities[1]), -- Critical
-	[2] = table.create(Capacities[2]), -- High
-	[3] = table.create(Capacities[3]), -- Normal
-	[4] = table.create(Capacities[4]), -- Background
-}
+local Queues = SharedTable.new()
+Queues[1] = SharedTable.new()
+Queues[2] = SharedTable.new()
+Queues[3] = SharedTable.new()
+Queues[4] = SharedTable.new()
 
-local WriteHeads = { 1, 1, 1, 1 }
-local ReadHeads = { 1, 1, 1, 1 }
+local Pointers = SharedTable.new()
+for i = 1, 4 do
+	local ptr = SharedTable.new()
+	ptr.Head = 1
+	ptr.Tail = 1
+	Pointers[i] = ptr
+end
+
+Queue.InstanceRegistry = {} -- Main thread only
+
 local TotalPushed = { 0, 0, 0, 0 }
 local TotalLoaded = { 0, 0, 0, 0 }
 
 function Queue.Push(priority: number, asset: any)
-	local head = WriteHeads[priority]
-	Queues[priority][head] = asset
-	-- Modulo wrap-around for true Ring Buffer (1-based index)
-	WriteHeads[priority] = (head % Capacities[priority]) + 1
+	local p = priority
+	local tail = Pointers[p].Tail
+	
+	local assetKey = asset
+	if typeof(asset) == "Instance" then
+		assetKey = "inst_" .. HttpService:GenerateGUID(false)
+		Queue.InstanceRegistry[assetKey] = asset
+	end
+
+	Queues[p][tail] = assetKey
+	Pointers[p].Tail = tail + 1
 	TotalPushed[priority] += 1
 end
 
-function Queue.Pop(priority: number): any
-	local readHead = ReadHeads[priority]
-	local writeHead = WriteHeads[priority]
-
-	if readHead ~= writeHead then
-		local asset = Queues[priority][readHead]
-		Queues[priority][readHead] = nil -- Free reference for GC (Memory Leak prevention)
-		ReadHeads[priority] = (readHead % Capacities[priority]) + 1
-		return asset
+function Queue.Pop(priority: number): any?
+	local p = priority
+	local head = Pointers[p].Head
+	if head == Pointers[p].Tail then return nil end
+	
+	local assetKey = Queues[p][head]
+	Queues[p][head] = nil -- Free memory
+	Pointers[p].Head = head + 1
+	
+	if type(assetKey) == "string" and string.sub(assetKey, 1, 5) == "inst_" then
+		local instance = Queue.InstanceRegistry[assetKey]
+		Queue.InstanceRegistry[assetKey] = nil -- Free registry
+		return instance
 	end
-	return nil
+
+	return assetKey
 end
 
 function Queue.IsEmpty(priority: number): boolean
-	return ReadHeads[priority] == WriteHeads[priority]
+	return Pointers[priority].Head == Pointers[priority].Tail
 end
 
 function Queue.AddLoaded(priority: number, count: number)
@@ -55,8 +71,12 @@ function Queue.ResetTracking(priority: number)
 end
 
 function Queue.Clear(priority: number)
-	ReadHeads[priority] = WriteHeads[priority]
-	table.clear(Queues[priority])
+	Pointers[priority].Head = Pointers[priority].Tail
+	SharedTable.clear(Queues[priority])
+end
+
+function Queue.GetRingBuffer(priority: number)
+	return Queues[priority]
 end
 
 return Queue

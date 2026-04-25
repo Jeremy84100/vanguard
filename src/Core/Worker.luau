@@ -59,17 +59,17 @@ local function ProcessQueue()
 
 				-- Auto-Retry Loop (1 retry max)
 				while retries <= 1 and not success do
-					local loadThread = task.spawn(function()
+					local loadThread = task.defer(function()
 						local pcallSuccess = pcall(function()
 							ContentProvider:PreloadAsync(exactBatch)
 						end)
-						task.spawn(currentThread, pcallSuccess)
+						task.defer(currentThread, pcallSuccess)
 					end)
 
 					local timeoutThread = task.delay(LOAD_TIMEOUT, function()
 						if coroutine.status(loadThread) ~= "dead" then
 							task.cancel(loadThread)
-							task.spawn(currentThread, false)
+							task.defer(currentThread, false)
 						end
 					end)
 
@@ -92,7 +92,7 @@ local function ProcessQueue()
 
 					local loaded, total = Queue.GetProgress(priority)
 					for _, cb in ipairs(OnProgressCallbacks[priority]) do
-						task.spawn(cb, loaded, total)
+						task.defer(cb, loaded, total)
 					end
 				else
 					if VanguardDebug then
@@ -102,14 +102,14 @@ local function ProcessQueue()
 						State.Set(exactBatch[i], 3)
 					end
 					for _, cb in ipairs(OnFailedCallbacks[priority]) do
-						task.spawn(cb)
+						task.defer(cb)
 					end
 				end
 
 				-- Trigger OnReady if queue is now empty
 				if Queue.IsEmpty(priority) then
 					for _, callback in ipairs(OnReadyCallbacks[priority]) do
-						task.spawn(callback)
+						task.defer(callback)
 					end
 					table.clear(OnReadyCallbacks[priority])
 					Queue.ResetTracking(priority)
@@ -130,7 +130,7 @@ function Worker.Start()
 		return
 	end
 	isRunning = true
-	task.spawn(ProcessQueue)
+	task.defer(ProcessQueue)
 end
 
 function Worker.Pause()

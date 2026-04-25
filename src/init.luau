@@ -5,6 +5,13 @@ local Worker = require(script.Core.Worker)
 
 local Vanguard = {}
 
+export type VanguardPriority = number
+export type VanguardOptions = {
+	BatchSize: number?,
+	Timeout: number?,
+	Debug: boolean?,
+}
+
 -- Auto-start worker
 Worker.Start()
 
@@ -17,7 +24,9 @@ local function FormatAsset(asset: any): any
 		end
 		return asset
 	elseif typeof(asset) == "Instance" then
-		-- Direct Instance support for ContentProvider (avoids nil block)
+		if asset:IsA("EditableImage") or asset:IsA("EditableMesh") then
+			return nil
+		end
 		return asset
 	end
 	return nil
@@ -52,7 +61,7 @@ end
 function Vanguard.OnReady(priority: number, callback: () -> ())
 	local prio = math.clamp(priority, 1, 4)
 	if Queue.IsEmpty(prio) then
-		task.spawn(callback)
+		task.defer(callback)
 	else
 		Worker.RegisterOnReady(prio, callback)
 	end
@@ -73,7 +82,7 @@ function Vanguard.Wait(priority: number)
 	end
 	local thread = coroutine.running()
 	Vanguard.OnReady(prio, function()
-		task.spawn(thread)
+		task.defer(thread)
 	end)
 	coroutine.yield()
 end
