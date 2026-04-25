@@ -70,19 +70,19 @@ local function ProcessQueue()
 
 				-- Auto-Retry Loop (1 retry max)
 				while retries <= 1 and not success do
-					local loadThread = task.defer(function()
+					local loadThread = task.spawn(function()
 						debug.profilebegin("Vanguard_BatchLoad")
 						local pcallSuccess = pcall(function()
 							ContentProvider:PreloadAsync(exactBatch)
 						end)
 						debug.profileend()
-						task.defer(currentThread, pcallSuccess)
+						task.spawn(currentThread, pcallSuccess)
 					end)
 
 					local timeoutThread = task.delay(LOAD_TIMEOUT, function()
 						if coroutine.status(loadThread) ~= "dead" then
 							task.cancel(loadThread)
-							task.defer(currentThread, false)
+							task.spawn(currentThread, false)
 						end
 					end)
 

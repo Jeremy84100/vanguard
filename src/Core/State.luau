@@ -1,5 +1,4 @@
 --!strict
-local HttpService = game:GetService("HttpService")
 local State = {}
 local AssetStatus = SharedTable.new()
 
@@ -7,6 +6,8 @@ State.InstanceRegistry = {}
 -- Les Clés Faibles (__mode = "k") s'occupent du nettoyage de la mémoire automatiquement
 -- quand l'Instance est détruite par le jeu. On ne doit pas le faire manuellement.
 setmetatable(State.InstanceRegistry, { __mode = "k" })
+
+local NextInstanceId = 1 -- Compteur d'ID numérique (Zéro-Allocation RAM)
 
 -- 0: Unloaded, 1: Pending, 2: Loaded, 3: Failed
 function State.Get(asset: any): number
@@ -23,7 +24,8 @@ function State.Set(asset: any, status: number)
 	if typeof(asset) == "Instance" then
 		assetKey = State.InstanceRegistry[asset]
 		if not assetKey then
-			assetKey = "inst_" .. HttpService:GenerateGUID(false)
+			assetKey = NextInstanceId
+			NextInstanceId += 1
 			State.InstanceRegistry[asset] = assetKey
 		end
 	end

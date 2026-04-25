@@ -1,5 +1,4 @@
 --!strict
-local HttpService = game:GetService("HttpService")
 local Queue = {}
 local Queues = SharedTable.new()
 Queues[1] = SharedTable.new()
@@ -8,6 +7,7 @@ Queues[3] = SharedTable.new()
 Queues[4] = SharedTable.new()
 
 local MAX_QUEUE_SIZE = 100000
+local NextInstanceId = 1 -- Compteur d'ID numérique (Zéro-Allocation RAM)
 
 local Pointers = SharedTable.new()
 for i = 1, 4 do
@@ -17,7 +17,7 @@ for i = 1, 4 do
 	Pointers[i] = ptr
 end
 
-Queue.InstanceRegistry = {} -- Main thread only: UUID -> Instance
+Queue.InstanceRegistry = {} -- Main thread only: number -> Instance
 setmetatable(Queue.InstanceRegistry, { __mode = "v" }) -- Weak values: allow GC if instance is destroyed
 
 local TotalPushed = { 0, 0, 0, 0 }
@@ -29,7 +29,8 @@ function Queue.Push(priority: number, asset: any)
 	
 	local assetKey = asset
 	if typeof(asset) == "Instance" then
-		assetKey = "inst_" .. HttpService:GenerateGUID(false)
+		assetKey = NextInstanceId
+		NextInstanceId += 1
 		Queue.InstanceRegistry[assetKey] = asset
 	end
 
@@ -47,7 +48,7 @@ function Queue.Pop(priority: number): any?
 	Queues[p][head] = nil -- Free memory
 	Pointers[p].Head = (head % MAX_QUEUE_SIZE) + 1
 	
-	if type(assetKey) == "string" and string.sub(assetKey, 1, 5) == "inst_" then
+	if type(assetKey) == "number" then
 		local instance = Queue.InstanceRegistry[assetKey]
 		Queue.InstanceRegistry[assetKey] = nil -- Free registry
 		return instance
@@ -82,7 +83,7 @@ function Queue.Clear(priority: number)
 	local current = head
 	while current ~= tail do
 		local assetKey = Queues[p][current]
-		if type(assetKey) == "string" and string.sub(assetKey, 1, 5) == "inst_" then
+		if type(assetKey) == "number" then
 			Queue.InstanceRegistry[assetKey] = nil
 		end
 		current = (current % MAX_QUEUE_SIZE) + 1
