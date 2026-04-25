@@ -152,6 +152,8 @@ local function ProcessQueue()
 							task.defer(callback)
 						end
 					end
+
+					break -- ⚠️ Strict Priority: Retourne à la priorité 1 immédiatement
 				end
 			end
 		end
