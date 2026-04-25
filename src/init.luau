@@ -69,7 +69,7 @@ function Vanguard.Cancel(asset: any)
 	if IsProcedural(asset) then return end
 	local formatted = FormatAsset(asset)
 	if formatted and State.Get(formatted) == 1 then
-		State.Set(formatted, 0)
+		State.Clear(formatted)
 	end
 end
 
@@ -77,6 +77,7 @@ function Vanguard.OnReady(priority: number, callback: () -> ()): VanguardConnect
 	local prio = math.clamp(priority, 1, 4)
 	if Queue.IsEmpty(prio) then
 		task.defer(callback)
+		-- Allocation minimale pour la compatibilité API
 		return { Disconnect = function() end }
 	else
 		local id = Worker.RegisterOnReady(prio, callback)
@@ -108,17 +109,21 @@ function Vanguard.OnFailed(priority: number, callback: () -> ()): VanguardConnec
 	}
 end
 
+--[=[
+	Attend que la queue d'une priorité donnée soit vide.
+]=]
 function Vanguard.Wait(priority: number)
 	local prio = math.clamp(priority, 1, 4)
 	if Queue.IsEmpty(prio) then return end
 	
 	local thread = coroutine.running()
-	local connection
+	local connection: VanguardConnection
 	
-	-- Auto-nettoyage de l'événement pour éviter la fuite de mémoire !
+	-- Note: Une closure est créée ici, mais Wait() étant une fonction bloquante,
+	-- elle ne peut pas être appelée dans une boucle serrée de type 60 FPS sans bloquer le thread.
 	connection = Vanguard.OnReady(prio, function()
 		if connection then connection:Disconnect() end
-		task.defer(thread)
+		task.spawn(thread)
 	end)
 	
 	coroutine.yield()
@@ -130,8 +135,12 @@ function Vanguard.GetStatus(asset: any): number
 	return formatted and State.Get(formatted) or 0
 end
 
+--[=[
+	Vise le Zéro-Allocation en passant directement la référence de State.Clear.
+]=]
 function Vanguard.ClearQueue(priority: number)
-	Queue.Clear(math.clamp(priority, 1, 4))
+	local prio = math.clamp(priority, 1, 4)
+	Queue.Clear(prio, State.Clear) -- ♻️ Zéro Closure !
 end
 
 function Vanguard.SetBatchSize(size: number)
@@ -140,7 +149,7 @@ end
 
 function Vanguard.LoadList(list: { any }, priority: number?)
 	local prio = math.clamp(priority or 3, 1, 4)
-	for _, asset in ipairs(list) do
+	for _, asset in list do
 		Vanguard.Load(asset, prio)
 	end
 end
@@ -163,7 +172,7 @@ function Vanguard.WaitForAsset(asset: any): boolean
 		local s = State.Get(formatted)
 		if s == 2 then return true end
 		if s == 3 then return false end
-		task.wait(0.1) -- 10 FPS de polling pour épargner le processeur
+		task.wait(0.1) -- Polling raisonnable
 	end
 end
 

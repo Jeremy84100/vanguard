@@ -1,16 +1,20 @@
 --!strict
 local Spatial = {}
 
+--[=[
+	Calcule la priorité d'un asset en fonction de la distance et de la vélocité.
+	Plus l'objet est proche ou s'approche rapidement, plus la priorité est haute (1).
+]=]
 function Spatial.CalculatePriority(origin: Vector3, velocity: Vector3, target: Vector3): number
 	local distance = (target - origin).Magnitude
 	local direction = (target - origin).Unit
 	local speed = velocity.Magnitude
 	
-	-- Predictive loading: if moving fast towards target, artificial distance reduction
+	-- Predictive loading: si on fonce vers l'objet, on réduit artificiellement la distance perçue
 	if speed > 10 then
 		local dotProduct = velocity.Unit:Dot(direction)
 		if dotProduct > 0.5 then
-			distance = distance - (speed * dotProduct)
+			distance = math.max(0, distance - (speed * dotProduct))
 		end
 	end
 	
@@ -20,13 +24,20 @@ function Spatial.CalculatePriority(origin: Vector3, velocity: Vector3, target: V
 	else return 4 end
 end
 
-function Spatial.Track(assets: { [any]: Vector3 }, origin: Vector3, velocity: Vector3)
-	task.desynchronize() -- Move to Parallel Thread
-	for assetId, pos in pairs(assets) do
-		-- Omitted Raycast for brevity in minimal implementation, added in full
-		local p = Spatial.CalculatePriority(origin, velocity, pos)
-		-- Send to SharedTable Queue
+--[=[
+	Exemple de traitement spatial en parallèle.
+	@param resultsBuffer Une table fournie par l'appelant qui sera recyclée (Zéro-Allocation).
+]=]
+function Spatial.Track(assets: { [any]: Vector3 }, resultsBuffer: { [any]: number }, origin: Vector3, velocity: Vector3)
+	task.desynchronize() -- Passage en mode Parallèle
+	
+	table.clear(resultsBuffer) -- ♻️ Recyclage de la table fournie
+	
+	for assetId, pos in assets do
+		resultsBuffer[assetId] = Spatial.CalculatePriority(origin, velocity, pos)
 	end
+	
+	task.synchronize() -- Retour en mode Serial
 end
 
 return Spatial

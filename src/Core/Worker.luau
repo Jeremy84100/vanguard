@@ -16,6 +16,8 @@ local OnFailedCallbacks: { [number]: { [number]: () -> () } } = { {}, {}, {}, {}
 local NextCallbackId = 1
 
 local BatchArray = table.create(BATCH_SIZE)
+local ExactBatchArray = {} -- ♻️ Recyclage : Évite table.create() dans la boucle
+local batchFailedAssets = {} -- ♻️ Recyclage : Évite {} dans la boucle
 
 local LOAD_TIMEOUT = 10
 local LastLoadTime = 0.5 -- Starting estimation
@@ -58,7 +60,10 @@ local function ProcessQueue()
 
 				if batchCount > 0 then
 					processedAny = true
-					local exactBatch = table.move(BatchArray, 1, batchCount, 1, table.create(batchCount))
+					
+					-- Zéro-Allocation : On recycle ExactBatchArray
+					table.clear(ExactBatchArray)
+					local exactBatch = table.move(BatchArray, 1, batchCount, 1, ExactBatchArray)
 					
 					if VanguardDebug then
 						print(string.format("[Vanguard] Loading batch of %d assets (Prio %d)", batchCount, priority))
@@ -67,7 +72,6 @@ local function ProcessQueue()
 					local currentThread = coroutine.running()
 					local finalSuccess = false
 					local retries = 0
-					local batchFailedAssets = {} -- 🔒 On isole les coupables pour éviter la punition collective
 
 					-- Auto-Retry Loop (1 retry max)
 					while retries <= 1 and not finalSuccess do
